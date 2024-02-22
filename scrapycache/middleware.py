@@ -5,7 +5,6 @@ import json
 
 SPLITTER = '!!TIME!!'
 
-
 class ScrapyCache:
 
     caches = []
