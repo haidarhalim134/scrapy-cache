@@ -33,7 +33,7 @@ class ScrapyCache:
             url = request.url
             cache = self.find_cache(url)
 
-            if cache and (datetime.datetime.now() - cache['time']).seconds < self.cache_lifetime:
+            if cache and ((datetime.datetime.now() - cache['time']).seconds < self.cache_lifetime or self.cache_lifetime == -1):
                 spider.logger.debug(f"cache used for <GET {url}>")
                 return request.replace(url=f'file:///{self.get_dummy_path()}', meta={**request.meta, '_force_refresh': True, '_original_url': url, '_data': cache}, dont_filter=True)
             
