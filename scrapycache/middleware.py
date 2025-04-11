@@ -1,10 +1,17 @@
 from scrapy import Spider, Request
 from scrapy.exceptions import IgnoreRequest
+from scrapy.http.response.html import HtmlResponse
+import re
 import os
 import datetime
 import json
 import sqlite3
 import time
+import random
+import scrapy
+import scrapy.http
+import scrapy.http.response
+import scrapy.http.response.html
 
 SPLITTER = '!!TIME!!'
 
@@ -35,44 +42,66 @@ class ScrapyCache:
         if self.cache_enable and not force_refresh:
             
             url = request.url
+            if request.meta.get("cache_id", None):
+                url = request.meta["cache_id"]
             cache = self.find_cache(url)
 
             if cache and ((datetime.datetime.now() - cache['time']).seconds < self.cache_lifetime or self.cache_lifetime == -1) and prefetch_check(url, cache):
-                spider.logger.debug(f"cache used for <GET {url}>")
-                return request.replace(url=f'file:////{self.get_dummy_path()}', meta={**request.meta, '_force_refresh': True, '_original_url': url, '_data': cache}, dont_filter=True)
 
-        if self.cache_enable and self.non_cache_delay > 0 and not request.url.startswith('file:///'):
+                ###
+                # PATCH: scrapy driver patch
+                ###
+                # if "init_request" in request.meta:
+                #     del request.meta['init_request']
+
+                spider.logger.debug(f"cache used for <GET {url}>")
+                request.meta['is_cache'] = True
+                return HtmlResponse(
+                    url=request.url,
+                    body=cache['content'].encode('utf8'),
+                    encoding="utf8",
+                    request=request,
+                    status=200
+                )
+        
+        delay = self.non_cache_delay() if callable(self.non_cache_delay) else self.non_cache_delay
+        if self.cache_enable and delay > 0 and not request.url.startswith('file:///'):
             spider.crawler.engine.pause()
-            time.sleep(self.non_cache_delay) 
+            time.sleep(delay) 
             spider.crawler.engine.unpause()
-            
+
+    req = 0  
     def process_response(self, request, response, spider):
 
         if response.status == 200:
 
-            prestore_check = request.meta.get('cache_prestore_check', lambda url, cache: True)
+            prestore_check = request.meta.get('cache_prestore_check', None)
 
             if not request.url.startswith('file:///'):
                 
-                if prestore_check(response.url, response.text):
-                    self.update_data(request.url, response.text)
+                url = request.url
+                if request.meta.get("cache_id", None):
+                    url = request.meta["cache_id"]
+
+                if not request.meta.get('is_cache', False) and (not hasattr(spider, 'prestore_check') or spider.prestore_check(url, response)) and (not prestore_check or prestore_check(url, response)):
+                    self.update_data(url, response.text)
+                else:
+                    del request.meta['is_cache']
 
             else:
-                response = response.replace(url=request.meta['_original_url'])
+                # response = response.replace(url=request.meta['_original_url'])
                 response = response.replace(body=request.meta['_data']['content'].encode('utf8'))
                 request.meta['_original_url'] = None
 
-        # TODO: remove later
-        with open("z-last.html", "w+") as fl:
-            fl.write(f"<div>{response.url}</div>" + response.text)
-
         request.meta['_force_refresh'] = False
+        if "cache_id" in request.meta:
+            del request.meta["cache_id"]
 
         return response.replace()
 
     def find_cache(self, url):
 
-        return self.form_data(self.c.execute("SELECT * FROM cache WHERE url=?", (url,)).fetchone())
+        return self.form_data(self.c.execute("SELECT * FROM cache WHERE url like ?", (url,)).fetchone())
 
     def get_dummy_path(self):
         return os.path.abspath(__file__)
